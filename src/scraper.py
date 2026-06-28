@@ -83,20 +83,31 @@ class Scraper:
         self._stop_requested = True
 
     def _safe_commit(self):
-        """Commit with retry on database lock."""
+        """Commit with retry on database lock. Handles rollback state."""
         for attempt in range(5):
             try:
                 self.session.commit()
                 return
             except Exception as e:
-                if 'database is locked' in str(e):
+                error_str = str(e)
+                if 'database is locked' in error_str:
                     self.session.rollback()
                     time.sleep(0.5 * (attempt + 1))
                     logger.debug(f"DB locked, retry commit {attempt + 1}/5")
+                elif 'PendingRollbackError' in error_str or 'rolled back' in error_str:
+                    self.session.rollback()
+                    return  # After rollback, nothing to commit
+                elif 'UNIQUE constraint' in error_str or 'IntegrityError' in error_str:
+                    self.session.rollback()
+                    return  # Duplicate - safe to ignore
                 else:
+                    self.session.rollback()
                     raise
-        # Last attempt - let it raise
-        self.session.commit()
+        # Last attempt
+        try:
+            self.session.commit()
+        except Exception:
+            self.session.rollback()
 
     # ==================== ADAPTIVE SPEED ====================
 
@@ -400,6 +411,17 @@ class Scraper:
             return True
 
         except Exception as e:
+            error_str = str(e)
+            # Handle duplicate URLs gracefully (sitemap can list same URL twice)
+            if 'UNIQUE constraint failed' in error_str or 'IntegrityError' in error_str:
+                logger.debug(f"Duplicate URL (already in DB): {url}")
+                self.session.rollback()
+                return True  # Not a real error - comic is already saved
+
+            # Handle session in bad state (PendingRollbackError etc.)
+            if 'PendingRollbackError' in error_str or 'rolled back' in error_str:
+                self.session.rollback()
+
             logger.error(f"Error processing {url}: {e}")
             self._on_error()
             return False
@@ -477,7 +499,13 @@ class Scraper:
                     urls.append(url)
 
             if sitemap_urls:
-                console.print(f"[dim]Fetching {len(sitemap_urls)} sub-sitemaps (patience - rate limits apply)...[/dim]")
+                # Filter out non-comic sitemaps (tags, categories, authors)
+                comic_sitemaps = [u for u in sitemap_urls if self._is_comic_sitemap(u)]
+                skipped_sitemaps = len(sitemap_urls) - len(comic_sitemaps)
+                if skipped_sitemaps:
+                    console.print(f"[dim]Skipping {skipped_sitemaps} non-comic sitemaps (tags/categories/authors)[/dim]")
+                console.print(f"[dim]Fetching {len(comic_sitemaps)} comic sitemaps (patience - rate limits apply)...[/dim]")
+                sitemap_urls = comic_sitemaps
 
             failed_sitemaps = []
             for i, sitemap_url in enumerate(sitemap_urls, 1):
@@ -537,14 +565,24 @@ class Scraper:
         return urls
 
     def _is_comic_url(self, url: str) -> bool:
-        """Check if URL is a comic page (not a category/tag/page)."""
+        """Check if URL is a comic page (not a category/tag/page/author)."""
         skip_patterns = [
             '/tag/', '/category/', '/page/',
             '/wp-content/', '/wp-admin/',
             '/feed/', '/comment-page-',
-            'getcomics.org/sitemap', '/author/'
+            'getcomics.org/sitemap', '/author/',
         ]
         return not any(pattern in url for pattern in skip_patterns)
+
+    def _is_comic_sitemap(self, url: str) -> bool:
+        """Check if a sub-sitemap contains comic posts (not tags/categories/authors)."""
+        skip_sitemap_patterns = [
+            'post_tag-sitemap',   # tag pages, not comics
+            'category-sitemap',   # category pages
+            'author-sitemap',     # author pages
+        ]
+        filename = url.split('/')[-1].lower()
+        return not any(pattern in filename for pattern in skip_sitemap_patterns)
 
     # ==================== INCREMENTAL UPDATE ====================
 

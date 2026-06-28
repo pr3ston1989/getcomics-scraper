@@ -47,6 +47,9 @@ def _extract_metadata(soup: BeautifulSoup) -> Dict[str, Optional[str]]:
     """
     Parse metadata block like:
     Language : English | Image Format : JPG | Year : 1993-1994 | Size : 61 MB
+
+    The metadata is usually on one line within the post content.
+    We need to be careful because get_text() can merge elements together.
     """
     metadata = {
         'language': None,
@@ -60,19 +63,32 @@ def _extract_metadata(soup: BeautifulSoup) -> Dict[str, Optional[str]]:
     if not post_content:
         return metadata
 
-    text = post_content.get_text()
+    # Use separator to avoid merging elements
+    text = post_content.get_text(separator='\n')
 
-    # Pattern: Key : Value | Key : Value ...
-    # Try to find the metadata line
+    # Find the line that contains metadata (has "Language" or "Year" or "Size" with colons)
+    metadata_line = None
+    for line in text.split('\n'):
+        line = line.strip()
+        # A metadata line typically has "Key : Value" pattern with pipe separators
+        if re.search(r'(?:Language|Year|Size)\s*:', line, re.IGNORECASE):
+            metadata_line = line
+            break
+
+    if not metadata_line:
+        # Fallback: search whole text but with tighter patterns
+        metadata_line = text
+
+    # Patterns that match "Key : Value" and stop at pipe, newline, or next key
     patterns = {
-        'language': r'Language\s*:\s*([^||\n]+)',
-        'image_format': r'(?:Image\s*)?Format\s*:\s*([^||\n]+)',
-        'year': r'Year\s*:\s*([^||\n]+)',
-        'size': r'Size\s*:\s*([^||\n]+)',
+        'language': r'Language\s*:\s*([A-Za-z\s]+?)(?:\s*\||$|\s*(?:Image|Format|Year|Size))',
+        'image_format': r'(?:Image\s*)?Format\s*:\s*([A-Za-z0-9\s]+?)(?:\s*\||$|\s*(?:Year|Size|Language))',
+        'year': r'Year\s*:\s*(\d{4}(?:\s*[-–]\s*\d{4})?)(?:\s*\||$|\s*(?:Size|Language|Format))',
+        'size': r'Size\s*:\s*(\d+(?:\.\d+)?\s*(?:MB|GB|KB|TB))(?:\s*\||$|\s*(?:Language|Year|Format))',
     }
 
     for key, pattern in patterns.items():
-        match = re.search(pattern, text, re.IGNORECASE)
+        match = re.search(pattern, metadata_line, re.IGNORECASE)
         if match:
             metadata[key] = match.group(1).strip()
 
