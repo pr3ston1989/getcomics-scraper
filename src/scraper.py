@@ -82,6 +82,22 @@ class Scraper:
     def request_stop(self):
         self._stop_requested = True
 
+    def _safe_commit(self):
+        """Commit with retry on database lock."""
+        for attempt in range(5):
+            try:
+                self.session.commit()
+                return
+            except Exception as e:
+                if 'database is locked' in str(e):
+                    self.session.rollback()
+                    time.sleep(0.5 * (attempt + 1))
+                    logger.debug(f"DB locked, retry commit {attempt + 1}/5")
+                else:
+                    raise
+        # Last attempt - let it raise
+        self.session.commit()
+
     # ==================== ADAPTIVE SPEED ====================
 
     def _on_success(self):
@@ -202,7 +218,7 @@ class Scraper:
         console.print("[cyan]Fetching sitemap index...[/cyan]")
         urls = self._get_all_comic_urls()
         state.total_urls = len(urls)
-        self.session.commit()
+        self._safe_commit()
 
         if not urls:
             console.print("[red]No URLs found in sitemap![/red]")
@@ -240,7 +256,7 @@ class Scraper:
                     state.status = 'stopped'
                     state.paused_at = datetime.utcnow()
                     state.processed_urls = start_index + i
-                    self.session.commit()
+                    self._safe_commit()
                     progress.stop()
                     self._print_summary(scraped_count, skipped_count, i)
                     return
@@ -252,7 +268,7 @@ class Scraper:
                     state.processed_urls = start_index + i + 1
                     progress.update(task, advance=1, status=self._status_text(scraped_count, skipped_count))
                     if skipped_count % 100 == 0:
-                        self.session.commit()
+                        self._safe_commit()
                     continue
 
                 # Scrape the page
@@ -267,7 +283,7 @@ class Scraper:
 
                 # Commit periodically
                 if (scraped_count + skipped_count) % 20 == 0:
-                    self.session.commit()
+                    self._safe_commit()
 
                 progress.update(task, advance=1, status=self._status_text(scraped_count, skipped_count))
 
@@ -280,7 +296,7 @@ class Scraper:
 
         state.status = 'completed'
         state.completed_at = datetime.utcnow()
-        self.session.commit()
+        self._safe_commit()
 
         self._print_summary(scraped_count, skipped_count, len(remaining_urls))
 
@@ -347,7 +363,7 @@ class Scraper:
 
                 progress.update(task, advance=1)
 
-        self.session.commit()
+        self._safe_commit()
         self._failed_urls = still_failed
 
         if recovered:
@@ -537,12 +553,12 @@ class Scraper:
                 if success:
                     new_count += 1
                     if new_count % 10 == 0:
-                        self.session.commit()
+                        self._safe_commit()
 
                 progress.update(task, advance=1, info=f"new: {new_count} | checking...")
                 self._delay()
 
-        self.session.commit()
+        self._safe_commit()
 
         if self._failed_urls:
             self._retry_failed_urls()
@@ -563,7 +579,7 @@ class Scraper:
                 status='idle'
             )
             self.session.add(state)
-            self.session.commit()
+            self._safe_commit()
 
         return state
 

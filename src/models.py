@@ -140,7 +140,27 @@ class DownloadQueue(Base):
 
 
 def get_engine(database_url='sqlite:///getcomics.db'):
-    return create_engine(database_url, echo=False)
+    connect_args = {}
+    if database_url.startswith('sqlite'):
+        connect_args = {'timeout': 60, 'check_same_thread': False}
+    engine = create_engine(database_url, echo=False, connect_args=connect_args)
+
+    # Enable WAL mode and busy timeout for SQLite
+    if database_url.startswith('sqlite'):
+        from sqlalchemy import event
+
+        @event.listens_for(engine, "connect")
+        def set_sqlite_pragma(dbapi_connection, connection_record):
+            cursor = dbapi_connection.cursor()
+            cursor.execute("PRAGMA busy_timeout=60000")
+            try:
+                cursor.execute("PRAGMA journal_mode=WAL")
+            except Exception:
+                pass  # WAL may fail if DB is locked, that's OK - busy_timeout is the important one
+            cursor.execute("PRAGMA synchronous=NORMAL")
+            cursor.close()
+
+    return engine
 
 
 def get_session(database_url='sqlite:///getcomics.db'):
