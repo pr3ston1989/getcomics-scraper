@@ -134,7 +134,7 @@ class Scraper:
     def _fetch_url(self, url: str, retries: int = MAX_RETRIES) -> Optional[requests.Response]:
         """
         Fetch a URL with retry and adaptive speed.
-        Returns response or None if all retries exhausted.
+        Rate limits (429) don't count against retry limit - we always wait and try again.
         """
         headers = {
             'User-Agent': self.config.user_agent,
@@ -143,7 +143,11 @@ class Scraper:
             'Connection': 'keep-alive',
         }
 
-        for attempt in range(retries):
+        attempt = 0
+        rate_limit_hits = 0
+        max_rate_limit_waits = 5  # Max consecutive 429s before giving up
+
+        while attempt < retries:
             try:
                 resp = requests.get(url, headers=headers, timeout=20)
 
@@ -152,50 +156,61 @@ class Scraper:
                     return resp
 
                 if resp.status_code == 429:
-                    # Rate limited - wait and retry
+                    # Rate limited - DON'T count as a retry attempt
+                    rate_limit_hits += 1
+                    if rate_limit_hits > max_rate_limit_waits:
+                        logger.error(f"Too many rate limits ({rate_limit_hits}) for: {url}")
+                        return None
+
                     retry_after = int(resp.headers.get('Retry-After', 30))
+                    # Increase wait with each consecutive 429
+                    wait_time = retry_after * rate_limit_hits
                     self._on_error(is_rate_limit=True)
-                    logger.warning(f"Rate limited (429). Waiting {retry_after}s...")
-                    time.sleep(retry_after)
+                    logger.warning(
+                        f"Rate limited (429). Waiting {wait_time}s "
+                        f"(hit #{rate_limit_hits})..."
+                    )
+                    time.sleep(wait_time)
                     self._total_retries += 1
-                    continue
+                    continue  # Don't increment attempt
 
                 if resp.status_code in (500, 502, 503, 504):
-                    # Server error - retry with backoff
                     self._on_error()
-                    wait = self._current_delay * (attempt + 1)
-                    logger.warning(f"Server error {resp.status_code} for {url}. Retry in {wait:.1f}s...")
+                    wait = 5 * (attempt + 1)
+                    logger.warning(f"Server error {resp.status_code}. Retry {attempt + 1}/{retries} in {wait}s...")
                     time.sleep(wait)
                     self._total_retries += 1
+                    attempt += 1
                     continue
 
                 if resp.status_code == 404:
-                    # Page gone - don't retry
                     logger.debug(f"404 Not Found: {url}")
                     return None
 
-                # Other errors
                 resp.raise_for_status()
 
             except requests.Timeout:
                 self._on_error()
-                wait = self._current_delay * (attempt + 1)
-                logger.warning(f"Timeout for {url}. Retry {attempt + 1}/{retries} in {wait:.1f}s...")
+                wait = 5 * (attempt + 1)
+                logger.warning(f"Timeout. Retry {attempt + 1}/{retries} in {wait}s...")
                 time.sleep(wait)
                 self._total_retries += 1
+                attempt += 1
 
             except requests.ConnectionError:
                 self._on_error()
-                wait = min(30, self._current_delay * (attempt + 1) * 2)
-                logger.warning(f"Connection error for {url}. Retry {attempt + 1}/{retries} in {wait:.1f}s...")
+                wait = 10 * (attempt + 1)
+                logger.warning(f"Connection error. Retry {attempt + 1}/{retries} in {wait}s...")
                 time.sleep(wait)
                 self._total_retries += 1
+                attempt += 1
 
             except requests.RequestException as e:
                 self._on_error()
                 logger.warning(f"Request error for {url}: {e}")
-                if attempt < retries - 1:
-                    time.sleep(self._current_delay * (attempt + 1))
+                attempt += 1
+                if attempt < retries:
+                    time.sleep(5 * attempt)
                     self._total_retries += 1
 
         logger.error(f"All {retries} retries exhausted for: {url}")
@@ -443,7 +458,7 @@ class Scraper:
         """Fetch sitemap index and extract all comic page URLs."""
         urls = []
 
-        resp = self._fetch_url(self.config.sitemap_url)
+        resp = self._fetch_url(self.config.sitemap_url, retries=10)
         if not resp:
             return urls
 
@@ -462,14 +477,38 @@ class Scraper:
                     urls.append(url)
 
             if sitemap_urls:
-                console.print(f"[dim]Fetching {len(sitemap_urls)} sub-sitemaps...[/dim]")
+                console.print(f"[dim]Fetching {len(sitemap_urls)} sub-sitemaps (patience - rate limits apply)...[/dim]")
 
-            for sitemap_url in sitemap_urls:
+            failed_sitemaps = []
+            for i, sitemap_url in enumerate(sitemap_urls, 1):
                 if self._stop_requested:
                     break
-                self._delay()
+
+                # Longer delay between sitemap fetches to avoid 429
+                time.sleep(max(2.0, self._current_delay))
+
+                # More retries for sitemaps - they're critical and one-time
                 sub_urls = self._fetch_sub_sitemap(sitemap_url)
-                urls.extend(sub_urls)
+                if sub_urls:
+                    urls.extend(sub_urls)
+                    console.print(f"  [dim][{i}/{len(sitemap_urls)}] {len(sub_urls)} URLs from {sitemap_url.split('/')[-1]}[/dim]")
+                else:
+                    failed_sitemaps.append(sitemap_url)
+                    console.print(f"  [yellow][{i}/{len(sitemap_urls)}] FAILED: {sitemap_url.split('/')[-1]} (will retry)[/yellow]")
+
+            # Retry failed sitemaps with longer waits
+            if failed_sitemaps:
+                console.print(f"\n[yellow]Retrying {len(failed_sitemaps)} failed sitemaps with longer delays...[/yellow]")
+                for sitemap_url in failed_sitemaps:
+                    if self._stop_requested:
+                        break
+                    time.sleep(10)  # Long wait before retry
+                    sub_urls = self._fetch_sub_sitemap(sitemap_url)
+                    if sub_urls:
+                        urls.extend(sub_urls)
+                        console.print(f"  [green]Recovered: {len(sub_urls)} URLs from {sitemap_url.split('/')[-1]}[/green]")
+                    else:
+                        console.print(f"  [red]Still failed: {sitemap_url.split('/')[-1]}[/red]")
 
         except ElementTree.ParseError as e:
             logger.error(f"Error parsing sitemap XML: {e}")
@@ -477,9 +516,10 @@ class Scraper:
         return urls
 
     def _fetch_sub_sitemap(self, url: str) -> List[str]:
-        """Fetch a sub-sitemap and extract comic URLs."""
+        """Fetch a sub-sitemap and extract comic URLs. Uses extra retries."""
         urls = []
-        resp = self._fetch_url(url)
+        # Give sitemaps more retries since they're critical one-time fetches
+        resp = self._fetch_url(url, retries=6)
         if not resp:
             return urls
 
