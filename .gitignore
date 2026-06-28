@@ -44,3 +44,12 @@ venv/
 ENV/
 env/
 downloads/
+
+getcomics.db-journal
+getcomics.db-wal
+getcomics.db-shm
+
+sitemap_urls.txt
+getcomics.db-journal
+getcomics.db-wal
+getcomics.db-shm

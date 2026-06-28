@@ -240,9 +240,8 @@ class Scraper:
             state.started_at = datetime.utcnow()
             state.processed_urls = 0
 
-        # Fetch sitemap
-        console.print("[cyan]Fetching sitemap index...[/cyan]")
-        urls = self._get_all_comic_urls()
+        # Get URLs - use cached list if resuming, otherwise fetch fresh
+        urls = self._get_cached_or_fetch_urls(resume and state.processed_urls > 0)
         state.total_urls = len(urls)
         self._safe_commit()
 
@@ -472,6 +471,34 @@ class Scraper:
         self.session.add(comic)
 
     # ==================== SITEMAP PARSING ====================
+
+    URL_CACHE_FILE = 'sitemap_urls.txt'
+
+    def _get_cached_or_fetch_urls(self, use_cache: bool) -> List[str]:
+        """
+        Get comic URLs from cache file (if resuming) or fetch fresh from sitemap.
+        Saves fetched URLs to cache for future resume.
+        """
+        import os
+
+        if use_cache and os.path.exists(self.URL_CACHE_FILE):
+            console.print("[green]Loading URL list from cache (skipping sitemap fetch)...[/green]")
+            with open(self.URL_CACHE_FILE, 'r') as f:
+                urls = [line.strip() for line in f if line.strip()]
+            console.print(f"[green]Loaded {len(urls)} URLs from cache[/green]")
+            return urls
+
+        # Fetch fresh from sitemap
+        console.print("[cyan]Fetching sitemap index...[/cyan]")
+        urls = self._get_all_comic_urls()
+
+        # Save to cache for resume
+        if urls:
+            with open(self.URL_CACHE_FILE, 'w') as f:
+                f.write('\n'.join(urls))
+            console.print(f"[dim]Cached {len(urls)} URLs for resume[/dim]")
+
+        return urls
 
     def _get_all_comic_urls(self) -> List[str]:
         """Fetch sitemap index and extract all comic page URLs."""
