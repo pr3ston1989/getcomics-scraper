@@ -36,13 +36,14 @@ logger = logging.getLogger(__name__)
 console = Console()
 
 # Adaptive speed constants
-MIN_DELAY = 0.3          # Fastest we'll go (seconds)
+MIN_DELAY = 0.3          # Absolute minimum (used only initially)
 DEFAULT_DELAY = 0.5      # Starting delay
 MAX_DELAY = 60.0         # Slowest (after many errors)
-SPEEDUP_AFTER = 10       # Speed up after N consecutive successes
+SPEEDUP_AFTER = 50       # Speed up after N consecutive successes (conservative)
 SLOWDOWN_FACTOR = 2.0    # Multiply delay by this on error
-SPEEDUP_FACTOR = 0.7     # Multiply delay by this on success streak
+SPEEDUP_FACTOR = 0.85    # Multiply delay by this on success streak (gentle speedup)
 MAX_RETRIES = 3          # Max retries per URL
+RATE_LIMIT_FLOOR = 1.2   # After any 429, never go below this delay
 
 
 class Scraper:
@@ -112,24 +113,27 @@ class Scraper:
     # ==================== ADAPTIVE SPEED ====================
 
     def _on_success(self):
-        """Called after a successful request."""
+        """Called after a successful request. Gently speeds up after long success streaks."""
         self._consecutive_successes += 1
         if self._consecutive_successes >= SPEEDUP_AFTER:
             old_delay = self._current_delay
-            self._current_delay = max(MIN_DELAY, self._current_delay * SPEEDUP_FACTOR)
+            # Never go below the rate limit floor once we've hit a 429
+            floor = RATE_LIMIT_FLOOR if self._total_errors > 0 else MIN_DELAY
+            self._current_delay = max(floor, self._current_delay * SPEEDUP_FACTOR)
             if self._current_delay != old_delay:
                 logger.debug(f"Speed up: {old_delay:.2f}s -> {self._current_delay:.2f}s")
             self._consecutive_successes = 0
 
     def _on_error(self, is_rate_limit: bool = False):
-        """Called after a failed request."""
+        """Called after a failed request. Slows down aggressively on rate limits."""
         self._consecutive_successes = 0
         self._total_errors += 1
 
         old_delay = self._current_delay
         if is_rate_limit:
-            # Aggressive slowdown for rate limits
-            self._current_delay = min(MAX_DELAY, self._current_delay * SLOWDOWN_FACTOR * 2)
+            # On 429: set delay to at least RATE_LIMIT_FLOOR, then double
+            self._current_delay = max(RATE_LIMIT_FLOOR, self._current_delay)
+            self._current_delay = min(MAX_DELAY, self._current_delay * SLOWDOWN_FACTOR)
         else:
             self._current_delay = min(MAX_DELAY, self._current_delay * SLOWDOWN_FACTOR)
 
