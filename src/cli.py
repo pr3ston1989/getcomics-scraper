@@ -9,7 +9,7 @@ from rich.table import Table
 from rich.prompt import Prompt, Confirm
 
 from .config import Config
-from .models import Comic, Tag, DownloadLink, DownloadQueue, get_session, init_db
+from .models import Comic, Tag, DownloadLink, DownloadQueue, comic_tags, get_session, init_db
 from .scraper import Scraper
 from .downloader import DownloadManager, generate_link_list
 
@@ -637,6 +637,112 @@ def search(ctx, query, limit):
         )
 
     console.print(table)
+
+
+@db.command()
+@click.option('--output', '-o', help='Save to file (default: print to screen)')
+@click.option('--min-count', '-m', type=int, default=1, help='Min comics count to include')
+@click.pass_context
+def tags(ctx, output, min_count):
+    """List all tags in database (exportable to file)."""
+    config = ctx.obj['config']
+    session = get_session(config.database_url)
+
+    from sqlalchemy import func
+
+    tag_stats = session.query(
+        Tag.name, func.count(comic_tags.c.comic_id)
+    ).join(comic_tags).group_by(Tag.name).having(
+        func.count(comic_tags.c.comic_id) >= min_count
+    ).order_by(func.count(comic_tags.c.comic_id).desc()).all()
+
+    if output:
+        with open(output, 'w', encoding='utf-8') as f:
+            for name, count in tag_stats:
+                f.write(f"{name} ({count})\n")
+        console.print(f"[green]Saved {len(tag_stats)} tags to {output}[/green]")
+    else:
+        table = Table(title=f"Tags ({len(tag_stats)} total)")
+        table.add_column("Tag", style="cyan")
+        table.add_column("Comics", style="green", width=8)
+        for name, count in tag_stats[:50]:
+            table.add_row(name, str(count))
+        console.print(table)
+        if len(tag_stats) > 50:
+            console.print(f"[dim]...and {len(tag_stats) - 50} more. Use -o tags.txt to export all.[/dim]")
+
+
+@db.command()
+@click.option('--output', '-o', help='Save to file (default: print to screen)')
+@click.option('--min-count', '-m', type=int, default=1, help='Min issues count to include')
+@click.pass_context
+def series(ctx, output, min_count):
+    """List all series in database (exportable to file)."""
+    config = ctx.obj['config']
+    session = get_session(config.database_url)
+
+    from sqlalchemy import func
+
+    series_stats = session.query(
+        Comic.series, func.count(Comic.id)
+    ).filter(Comic.series.isnot(None)).group_by(Comic.series).having(
+        func.count(Comic.id) >= min_count
+    ).order_by(func.count(Comic.id).desc()).all()
+
+    if output:
+        with open(output, 'w', encoding='utf-8') as f:
+            for name, count in series_stats:
+                f.write(f"{name} ({count})\n")
+        console.print(f"[green]Saved {len(series_stats)} series to {output}[/green]")
+    else:
+        table = Table(title=f"Series ({len(series_stats)} total)")
+        table.add_column("Series", style="cyan", max_width=60)
+        table.add_column("Issues", style="green", width=8)
+        for name, count in series_stats[:50]:
+            table.add_row((name or '-')[:60], str(count))
+        console.print(table)
+        if len(series_stats) > 50:
+            console.print(f"[dim]...and {len(series_stats) - 50} more. Use -o series.txt to export all.[/dim]")
+
+
+@db.command()
+@click.option('--output', '-o', help='Save to file')
+@click.option('--tag', '-t', help='Filter by tag')
+@click.option('--series-filter', '-s', help='Filter by series name')
+@click.pass_context
+def titles(ctx, output, tag, series_filter):
+    """List all comic titles (exportable to file)."""
+    config = ctx.obj['config']
+    session = get_session(config.database_url)
+
+    query = session.query(Comic)
+    if tag:
+        query = query.filter(Comic.tags.any(Tag.name.ilike(f'%{tag}%')))
+    if series_filter:
+        query = query.filter(Comic.series.ilike(f'%{series_filter}%'))
+
+    comics = query.order_by(Comic.title).all()
+
+    if output:
+        with open(output, 'w', encoding='utf-8') as f:
+            for comic in comics:
+                line = comic.title
+                if comic.year:
+                    line += f" [{comic.year}]"
+                if comic.size:
+                    line += f" ({comic.size})"
+                f.write(line + '\n')
+        console.print(f"[green]Saved {len(comics)} titles to {output}[/green]")
+    else:
+        table = Table(title=f"Titles ({len(comics)} total)")
+        table.add_column("Title", style="cyan", max_width=65)
+        table.add_column("Year", style="yellow", width=10)
+        table.add_column("Size", style="magenta", width=8)
+        for comic in comics[:50]:
+            table.add_row(comic.title[:65], comic.year or '-', comic.size or '-')
+        console.print(table)
+        if len(comics) > 50:
+            console.print(f"[dim]...and {len(comics) - 50} more. Use -o titles.txt to export all.[/dim]")
 
 
 @db.command()
