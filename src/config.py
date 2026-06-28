@@ -12,9 +12,9 @@ class Config:
         self.database_url = os.getenv('DATABASE_URL', 'sqlite:///getcomics.db')
         self.sitemap_url = os.getenv('SITEMAP_URL', 'https://getcomics.org/sitemap_index.xml')
 
-        # Scraper rate limiting
-        self.scrape_delay_min = float(os.getenv('SCRAPE_DELAY_MIN', '2.0'))
-        self.scrape_delay_max = float(os.getenv('SCRAPE_DELAY_MAX', '5.0'))
+        # Scraper rate limiting (adaptive - these are just initial hints)
+        self.scrape_delay_min = float(os.getenv('SCRAPE_DELAY_MIN', '0.3'))
+        self.scrape_delay_max = float(os.getenv('SCRAPE_DELAY_MAX', '1.0'))
 
         # Download settings
         self.max_concurrent_downloads = int(os.getenv('MAX_CONCURRENT_DOWNLOADS', '3'))

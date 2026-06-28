@@ -6,7 +6,7 @@ from bs4 import BeautifulSoup
 
 def parse_comic_page(html: str, page_url: str) -> Dict:
     """Parse a single comic page and extract all relevant info."""
-    soup = BeautifulSoup(html, 'lxml')
+    soup = BeautifulSoup(html, 'html.parser')
 
     title = _extract_title(soup)
     metadata = _extract_metadata(soup)
