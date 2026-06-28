@@ -339,13 +339,17 @@ def _parse_selection(text: str, max_val: int) -> list:
 @click.option('--search', '-q', help='Add by title search')
 @click.option('--comic-id', '-i', type=int, help='Add specific comic by ID')
 @click.option('--host', '-h', help='Prefer specific host')
+@click.option('--all', 'all_comics', is_flag=True, help='Add ALL not-yet-downloaded comics')
 @click.pass_context
-def add(ctx, series, tag, search, comic_id, host):
+def add(ctx, series, tag, search, comic_id, host, all_comics):
     """Add comics to download queue."""
     config = ctx.obj['config']
     dm = DownloadManager(config)
 
-    if comic_id:
+    if all_comics:
+        count = dm.add_all_not_downloaded(host)
+        console.print(f"[green]Added {count} not-yet-downloaded comics to queue[/green]")
+    elif comic_id:
         if dm.add_comic(comic_id, host):
             console.print(f"[green]Added comic #{comic_id} to queue[/green]")
         else:
@@ -360,7 +364,7 @@ def add(ctx, series, tag, search, comic_id, host):
         count = dm.add_by_search(search, host)
         console.print(f"[green]Added {count} comics matching '{search}'[/green]")
     else:
-        console.print("[red]Specify --series, --tag, --search, or --comic-id[/red]")
+        console.print("[red]Specify --all, --series, --tag, --search, or --comic-id[/red]")
 
 
 @download.command(name='start')
@@ -630,6 +634,62 @@ def search(ctx, query, limit):
             comic.year or '-',
             comic.size or '-',
             str(len(comic.download_links)),
+        )
+
+    console.print(table)
+
+
+@db.command()
+@click.option('--downloaded/--not-downloaded', default=None, help='Filter by download status')
+@click.option('--series', '-s', help='Filter by series')
+@click.option('--limit', '-l', default=30, help='Max results')
+@click.pass_context
+def progress(ctx, downloaded, series, limit):
+    """Show download progress - what's downloaded vs pending."""
+    config = ctx.obj['config']
+    session = get_session(config.database_url)
+
+    from sqlalchemy import func
+
+    total = session.query(Comic).count()
+    done = session.query(Comic).filter(Comic.is_downloaded == True).count()
+    pending = total - done
+
+    console.print(f"\n[bold]Overall progress: {done}/{total} downloaded ({pending} remaining)[/bold]\n")
+
+    # Show filtered list
+    query = session.query(Comic)
+    if downloaded is True:
+        query = query.filter(Comic.is_downloaded == True)
+        title_prefix = "Downloaded"
+    elif downloaded is False:
+        query = query.filter(Comic.is_downloaded == False)
+        title_prefix = "Not Downloaded"
+    else:
+        title_prefix = "All"
+
+    if series:
+        query = query.filter(Comic.series.ilike(f'%{series}%'))
+        title_prefix += f" (series: {series})"
+
+    comics = query.order_by(Comic.downloaded_at.desc().nullsfirst()).limit(limit).all()
+
+    table = Table(title=f"{title_prefix} ({len(comics)} shown)")
+    table.add_column("ID", style="dim", width=5)
+    table.add_column("Title", style="cyan", max_width=50)
+    table.add_column("Size", style="magenta", width=8)
+    table.add_column("Status", style="green", width=12)
+    table.add_column("Downloaded", style="yellow", max_width=20)
+
+    for comic in comics:
+        status = "[green]✓ Done[/green]" if comic.is_downloaded else "[red]✗ Pending[/red]"
+        dl_date = str(comic.downloaded_at)[:16] if comic.downloaded_at else '-'
+        table.add_row(
+            str(comic.id),
+            comic.title[:50],
+            comic.size or '-',
+            status,
+            dl_date,
         )
 
     console.print(table)

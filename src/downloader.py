@@ -94,6 +94,13 @@ class DownloadManager:
         ).all()
         return self._enqueue_comics(comics, host_filter)
 
+    def add_all_not_downloaded(self, host_filter: Optional[str] = None) -> int:
+        """Add ALL comics that haven't been downloaded yet to the queue."""
+        comics = self.session.query(Comic).filter(
+            Comic.is_downloaded == False
+        ).all()
+        return self._enqueue_comics(comics, host_filter)
+
     def add_comic(self, comic_id: int, host_filter: Optional[str] = None) -> bool:
         """Add a single comic to download queue."""
         comic = self.session.query(Comic).get(comic_id)
