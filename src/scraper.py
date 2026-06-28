@@ -463,12 +463,9 @@ class Scraper:
                 is_external=is_external,
             )
 
-            # Resolve direct links during scraping
-            if not is_external and 'getcomics.org/dls/' in original_url:
-                resolved, _ = self.resolver.resolve(original_url)
-                if resolved and resolved != original_url:
-                    link.resolved_url = resolved
-                    link.resolved_at = datetime.utcnow()
+            # NOTE: We intentionally do NOT resolve links during scraping.
+            # Resolving hits getcomics.org again (429 risk) and slows scraping 3-5x.
+            # Links are resolved on-demand at download time instead.
 
             comic.download_links.append(link)
 
