@@ -83,6 +83,40 @@ Wpisujesz frazę → dostajesz tabelę wyników → wybierasz:
 - `l mega` - wygeneruj listę linków z mega.nz
 - `l all` - wszystkie linki (do skopiowania do JDownloader)
 
+### Przeglądanie bazy - co jest do pobrania
+
+```bash
+# Lista wszystkich tagów (ekran - top 50)
+getcomics db tags
+
+# Eksport tagów do pliku (wszystkie)
+getcomics db tags -o tags.txt
+
+# Tylko tagi z min. 10 komiksami
+getcomics db tags -m 10
+
+# Lista serii
+getcomics db series -o series.txt
+getcomics db series -m 5    # min 5 zeszytów w serii
+
+# Lista tytułów
+getcomics db titles -o titles.txt
+
+# Tytuły z konkretnego tagu
+getcomics db titles -t "DC" -o dc_titles.txt
+
+# Tytuły z konkretnej serii
+getcomics db titles -s "Batman" -o batman.txt
+
+# Szukaj w bazie
+getcomics db search -q "Spider-Man"
+
+# Co pobrane / co czeka
+getcomics db progress
+getcomics db progress --not-downloaded
+getcomics db progress --downloaded -s "Batman"
+```
+
 ### Pobieranie (CLI)
 
 ```bash
