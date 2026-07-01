@@ -350,13 +350,17 @@ class DownloadManager:
         # Check disk space before downloading
         self._check_disk_space()
 
+        # Get the comic page URL to use as Referer (needed for /dls/ links)
+        comic = self.session.query(Comic).get(item.comic_id)
+        source_page_url = comic.page_url if comic else None
+
         # Determine the URL to download from
-        download_url = self._get_download_url(link)
+        download_url = self._get_download_url(link, source_page_url=source_page_url)
         if not download_url:
             raise DownloadError(f"Could not resolve download URL for: {link.original_url[:80]}")
 
         # Start streaming download
-        resp = self.resolver.resolve_for_download(download_url)
+        resp = self.resolver.resolve_for_download(download_url, source_page_url=source_page_url)
         if not resp:
             raise DownloadError(f"Failed to connect to: {download_url[:80]}")
 
@@ -407,7 +411,7 @@ class DownloadManager:
         finally:
             resp.close()
 
-    def _get_download_url(self, link: DownloadLink) -> Optional[str]:
+    def _get_download_url(self, link: DownloadLink, source_page_url: Optional[str] = None) -> Optional[str]:
         """Get the best URL to download from."""
         # If we have a fresh resolved URL, use it
         if link.resolved_url and link.resolved_at:
@@ -416,7 +420,7 @@ class DownloadManager:
                 return link.resolved_url
 
         # Re-resolve from original URL
-        resolved, _ = self.resolver.resolve(link.original_url)
+        resolved, _ = self.resolver.resolve(link.original_url, source_page_url=source_page_url)
         if resolved:
             link.resolved_url = resolved
             link.resolved_at = datetime.utcnow()

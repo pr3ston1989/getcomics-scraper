@@ -32,13 +32,18 @@ class LinkResolver:
         self._session = requests.Session()
         self._session.headers.update({
             'User-Agent': config.user_agent,
-            'Accept': '*/*',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
         })
 
-    def resolve(self, url: str) -> Tuple[Optional[str], Optional[str]]:
+    def resolve(self, url: str, source_page_url: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
         """
         Resolve a download link to its final URL.
 
+        source_page_url: the comic page URL to use as Referer header.
         Returns:
             Tuple of (resolved_url, filename) or (None, None) on failure.
         """
@@ -46,12 +51,17 @@ class LinkResolver:
             # External links (mega, mediafire) can't be resolved - return as-is
             return url, None
 
+        # Build Referer: prefer the actual comic page, fall back to getcomics root
+        referer = source_page_url or 'https://getcomics.org/'
+        extra_headers = {'Referer': referer}
+
         try:
             # Use HEAD request first to avoid downloading the file
             resp = self._session.head(
                 url,
                 allow_redirects=True,
-                timeout=30
+                timeout=30,
+                headers=extra_headers,
             )
 
             if resp.status_code == 200:
@@ -65,7 +75,8 @@ class LinkResolver:
                 url,
                 allow_redirects=True,
                 stream=True,
-                timeout=30
+                timeout=30,
+                headers=extra_headers,
             )
             resp.close()  # Don't download the body
 
@@ -81,17 +92,27 @@ class LinkResolver:
             logger.error(f"Error resolving {url}: {e}")
             return None, None
 
-    def resolve_for_download(self, url: str) -> Optional[requests.Response]:
+    def resolve_for_download(self, url: str, source_page_url: Optional[str] = None) -> Optional[requests.Response]:
         """
         Resolve and start downloading - returns streaming response.
         Caller is responsible for closing the response.
+
+        source_page_url: the comic page URL to use as Referer header.
         """
         try:
+            headers = {}
+            if source_page_url:
+                headers['Referer'] = source_page_url
+            elif 'getcomics.org/dls/' in url:
+                # Build a best-effort Referer from the getcomics domain
+                headers['Referer'] = 'https://getcomics.org/'
+
             resp = self._session.get(
                 url,
                 allow_redirects=True,
                 stream=True,
-                timeout=60
+                timeout=60,
+                headers=headers,
             )
             resp.raise_for_status()
             return resp
