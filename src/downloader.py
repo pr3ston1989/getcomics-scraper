@@ -288,7 +288,11 @@ class DownloadManager:
                     continue
                 item.status = 'downloading'
                 item.started_at = datetime.utcnow()
-                self.session.commit()
+                try:
+                    self.session.commit()
+                except Exception:
+                    self.session.rollback()
+                    continue
 
             try:
                 self._download_item(item)
@@ -302,13 +306,13 @@ class DownloadManager:
                     comic.download_path = item.filepath
                     comic.downloaded_at = datetime.utcnow()
 
-                self.session.commit()
+                self._safe_commit()
 
             except DiskFullError as e:
                 logger.error(f"DISK FULL! Pausing all downloads. {e}")
                 item.status = 'paused'
                 item.error_message = str(e)
-                self.session.commit()
+                self._safe_commit()
                 self._error_event.set()
                 self._pause_requested = True
 
@@ -320,7 +324,7 @@ class DownloadManager:
                 if item.link:
                     item.link.resolved_url = None
                     item.link.resolved_at = None
-                self.session.commit()
+                self._safe_commit()
 
             except DownloadError as e:
                 item.retry_count += 1
@@ -333,12 +337,12 @@ class DownloadManager:
                     item.error_message = f"Retry {item.retry_count}/3: {e}"
                     logger.warning(f"Download retry {item.retry_count}/3: {item.comic.title}")
                     time.sleep(2 ** item.retry_count)  # Exponential backoff
-                self.session.commit()
+                self._safe_commit()
 
             except Exception as e:
                 item.status = 'failed'
                 item.error_message = f"Unexpected error: {e}"
-                self.session.commit()
+                self._safe_commit()
                 logger.error(f"Unexpected download error: {e}", exc_info=True)
 
     def _download_item(self, item: DownloadQueue):
