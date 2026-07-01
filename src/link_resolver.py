@@ -55,6 +55,15 @@ class LinkResolver:
         referer = source_page_url or 'https://getcomics.org/'
         extra_headers = {'Referer': referer}
 
+        # Visit the comic page first to obtain session cookies.
+        # GetComics ties /dls/ tokens to a browser session - without cookies = 403.
+        if source_page_url and 'getcomics.org/dls/' in url:
+            logger.debug(f"Visiting source page to obtain session cookies: {source_page_url}")
+            try:
+                self._session.get(source_page_url, timeout=20)
+            except requests.RequestException:
+                pass  # Best-effort; proceed regardless
+
         try:
             # Use HEAD request first to avoid downloading the file
             resp = self._session.head(
@@ -97,14 +106,22 @@ class LinkResolver:
         Resolve and start downloading - returns streaming response.
         Caller is responsible for closing the response.
 
-        source_page_url: the comic page URL to use as Referer header.
+        source_page_url: the comic page URL to visit first (sets cookies + Referer).
         """
         try:
+            # Visit the comic page first to obtain session cookies, then download.
+            # GetComics ties /dls/ tokens to a browser session - without cookies = 403.
+            if source_page_url and 'getcomics.org/dls/' in url:
+                logger.debug(f"Visiting source page to obtain session cookies: {source_page_url}")
+                try:
+                    self._session.get(source_page_url, timeout=20)
+                except requests.RequestException:
+                    pass  # Best-effort; proceed regardless
+
             headers = {}
             if source_page_url:
                 headers['Referer'] = source_page_url
             elif 'getcomics.org/dls/' in url:
-                # Build a best-effort Referer from the getcomics domain
                 headers['Referer'] = 'https://getcomics.org/'
 
             resp = self._session.get(
